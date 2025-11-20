@@ -15,15 +15,12 @@ type TokenResponse struct {
 	ExpiresIn   int    `json:"expires_in"`
 }
 
-type Azul struct {
-}
-
-func (u *Azul) GetToken(url string, payload url.Values) (string, error) {
+func GetToken(url string, payload url.Values) (string, error) {
 
 	encodedData := payload.Encode()
 
 	// 3. Buat Request baru. Gunakan strings.NewReader karena encodedData adalah string
-	req, err := http.NewRequest("POST", "https://login.microsoftonline.com/6175c024-2e27-41d2-b020-5d4419dc6a9a/oauth2/v2.0/token", strings.NewReader(encodedData))
+	req, err := http.NewRequest("POST", url, strings.NewReader(encodedData))
 	if err != nil {
 		log.Fatalf("Error creating request: %v", err)
 	}
