@@ -1,6 +1,7 @@
 package utility
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -8,6 +9,10 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
+
+	"github.com/MicahParks/keyfunc/v2"
+	"github.com/golang-jwt/jwt/v5"
 )
 
 type TokenResponse struct {
@@ -115,4 +120,98 @@ func GetUserByEmailOrID(url, token, emailOrID string) (GraphUser, AzureErrorResp
 	json.Unmarshal(body, &graphUserResp)
 
 	return graphUserResp, AzureErrorResponse{}, nil
+}
+
+func ValidateAzureJWT(tokenString, tenantID, expectedAudience, expectedIssuer string) (jwt.MapClaims, error) {
+	// JWKS URL dari Azure
+	jwksURL := fmt.Sprintf("https://login.microsoftonline.com/%s/discovery/v2.0/keys", tenantID)
+
+	// Load JWKS
+	jwks, err := keyfunc.Get(jwksURL, keyfunc.Options{
+		RefreshInterval: time.Hour,
+		RefreshErrorHandler: func(err error) {
+			fmt.Printf("JWKS refresh error: %v\n", err)
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("gagal memuat JWKS: %w", err)
+	}
+
+	// Parse token
+	token, err := jwt.Parse(tokenString, jwks.Keyfunc)
+	if err != nil {
+		return nil, fmt.Errorf("token tidak valid: %w", err)
+	}
+
+	// Validasi claim dasar
+	if !token.Valid {
+		return nil, fmt.Errorf("JWT tidak valid")
+	}
+
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok {
+		return nil, fmt.Errorf("gagal membaca claims")
+	}
+
+	// Validasi issuer dan audience
+	if claims["iss"] != expectedIssuer {
+		return nil, fmt.Errorf("issuer tidak cocok")
+	}
+
+	if claims["aud"] != expectedAudience {
+		return nil, fmt.Errorf("audience tidak cocok")
+	}
+
+	return claims, nil
+}
+
+func SendEmail(token, sender, recipient, subject, content string) (int, error) {
+	url := "https://graph.microsoft.com/v1.0/users/" + sender + "/sendMail"
+
+	email := map[string]any{
+		"message": map[string]any{
+			"subject": subject,
+			"body": map[string]any{
+				"contentType": "HTML",
+				"content":     content,
+			},
+			"toRecipients": []map[string]any{
+				{
+					"emailAddress": map[string]any{
+						"address": recipient,
+					},
+				},
+			},
+		},
+		"saveToSentItems": "true",
+	}
+
+	jsonData, err := json.Marshal(email)
+	if err != nil {
+		log.Fatalf("Error marshaling email data: %v", err)
+	}
+
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		log.Fatalf("Error creating request: %v", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Fatalf("Error making POST request: %v", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Fatalf("Error reading response body: %v", err)
+	}
+	if resp.StatusCode != http.StatusAccepted {
+		log.Fatalf("Error sending email: %s", body)
+	}
+	log.Println("Email sent successfully")
+	return resp.StatusCode, nil
 }
